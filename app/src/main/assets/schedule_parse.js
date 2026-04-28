@@ -1,46 +1,17 @@
 (function () {
     var SCORE_THRESHOLD = 30;
     var CORE_KEYWORDS = ["课表", "星期", "节次", "schedule", "timetable"];
-    var CLASS_ID_PATTERN = /course|schedule|timetable|kcb/i;
+    // 增加更多教务系统常见的拼音缩写特征词
+    var CLASS_ID_PATTERN = /course|schedule|timetable|kcb|kb|xskb|chengji/i;
     var MEDIUM_PATTERN = /周[一二三四五六日天]|星期[一二三四五六日天]|第一节/g;
     var BLOCK_TAGS = {
-        ADDRESS: true,
-        ARTICLE: true,
-        ASIDE: true,
-        BLOCKQUOTE: true,
-        CAPTION: true,
-        DD: true,
-        DIV: true,
-        DL: true,
-        DT: true,
-        FIELDSET: true,
-        FIGCAPTION: true,
-        FIGURE: true,
-        FOOTER: true,
-        FORM: true,
-        H1: true,
-        H2: true,
-        H3: true,
-        H4: true,
-        H5: true,
-        H6: true,
-        HEADER: true,
-        HR: true,
-        LI: true,
-        MAIN: true,
-        NAV: true,
-        OL: true,
-        P: true,
-        PRE: true,
-        SECTION: true,
-        TABLE: true,
-        TBODY: true,
-        TD: true,
-        TFOOT: true,
-        TH: true,
-        THEAD: true,
-        TR: true,
-        UL: true
+        ADDRESS: true, ARTICLE: true, ASIDE: true, BLOCKQUOTE: true, CAPTION: true,
+        DD: true, DIV: true, DL: true, DT: true, FIELDSET: true, FIGCAPTION: true,
+        FIGURE: true, FOOTER: true, FORM: true, H1: true, H2: true, H3: true,
+        H4: true, H5: true, H6: true, HEADER: true, HR: true, LI: true,
+        MAIN: true, NAV: true, OL: true, P: true, PRE: true, SECTION: true,
+        TABLE: true, TBODY: true, TD: true, TFOOT: true, TH: true, THEAD: true,
+        TR: true, UL: true
     };
 
     function normalizeText(value) {
@@ -98,17 +69,44 @@
         return score;
     }
 
+    // 新增：安全地获取当前 window 及所有子 iframe/frameset 的 document，忽略跨域报错
+    function getSafeDocuments(win, docs) {
+        docs = docs || [];
+        try {
+            if (win.document) {
+                docs.push(win.document);
+            }
+        } catch (e) {
+            // 忽略 CORS 报错
+        }
+
+        try {
+            if (win.frames && win.frames.length > 0) {
+                for (var i = 0; i < win.frames.length; i++) {
+                    getSafeDocuments(win.frames[i], docs);
+                }
+            }
+        } catch (e) {
+            // 忽略跨域报错
+        }
+        return docs;
+    }
+
+    // 重写：支持递归遍历 iframe
     function findScheduleContainer() {
-        var candidates = Array.prototype.slice.call(document.querySelectorAll("div, table, section"));
+        var allDocs = getSafeDocuments(window);
         var bestElement = null;
         var bestScore = 0;
 
-        candidates.forEach(function (element) {
-            var score = calculateScore(element);
-            if (score > bestScore) {
-                bestScore = score;
-                bestElement = element;
-            }
+        allDocs.forEach(function (doc) {
+            var candidates = Array.prototype.slice.call(doc.querySelectorAll("div, table, section"));
+            candidates.forEach(function (element) {
+                var score = calculateScore(element);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestElement = element;
+                }
+            });
         });
 
         return {
@@ -242,7 +240,7 @@
                 html: "",
                 text: "",
                 score: match.score,
-                message: "未找到可信的课表容器"
+                message: "未找到可信的课表容器 (可能由于跨域限制或页面尚未加载完毕)"
             });
         }
 
@@ -256,6 +254,7 @@
 
     var result = buildResult();
 
+    // 回传给 Android 端
     if (window.ScheduleBridge && typeof window.ScheduleBridge.onScheduleParsed === "function") {
         window.ScheduleBridge.onScheduleParsed(result);
     }

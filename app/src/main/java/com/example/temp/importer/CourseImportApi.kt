@@ -14,6 +14,7 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 data class LlmApiConfig(
     val endpoint: String,
@@ -22,7 +23,11 @@ data class LlmApiConfig(
 )
 
 class CourseImportApi(
-    okHttpClient: OkHttpClient = OkHttpClient()
+    okHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .build()
 ) {
     private val eventSourceFactory: EventSource.Factory = EventSources.createFactory(okHttpClient)
 

@@ -122,9 +122,9 @@ class MainActivity : ComponentActivity() {
         private const val EDUCATION_SYSTEM_URL = "about:blank"
 
         private val LLM_CONFIG = LlmApiConfig(
-            endpoint = "https://api.example.com/v1/chat/completions",
-            apiKey = "YOUR_API_KEY",
-            model = "YOUR_MODEL"
+            endpoint = "https://api-ai.vivo.com.cn/v1",
+            apiKey = "sk-xuanji-2026584001-Q1FvQkdOZGhPTHluSWlDUg==",
+            model = "qwen3.5-plus"
         )
     }
 }
@@ -175,10 +175,12 @@ private fun ScheduleImportScreen(
         modifier = modifier,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
+            // 这里修复了报错：直接使用内容闭包传递 Text，而不是使用 text = {} 命名参数
             ExtendedFloatingActionButton(
-                onClick = { webViewState.value?.let(injectScheduleParser) },
-                text = { Text("提取课表") }
-            )
+                onClick = { webViewState.value?.let(injectScheduleParser) }
+            ) {
+                Text("提取课表")
+            }
         }
     ) { innerPadding ->
         AndroidView(

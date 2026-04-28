@@ -1,6 +1,6 @@
 package com.example.temp.importer
 
-const val COURSE_SCHEDULE_SYSTEM_PROMPT = """
+val COURSE_SCHEDULE_SYSTEM_PROMPT = """
 You are a course schedule parser.
 
 Task:
