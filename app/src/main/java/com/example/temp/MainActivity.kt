@@ -3,12 +3,15 @@ package com.example.temp
 import android.annotation.SuppressLint
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -37,14 +40,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.temp.importer.Course
+import com.example.temp.data.CalendarExportHelper
+import com.example.temp.data.Course as StoredCourse
+import com.example.temp.data.ScheduleRepository
+import com.example.temp.data.TimeConfigManager
+import com.example.temp.importer.Course as ImportedCourse
 import com.example.temp.importer.CourseImportViewModel
 import com.example.temp.importer.ImportState
 import com.example.temp.importer.LlmApiConfig
 import com.example.temp.ui.theme.TempTheme
+import java.time.LocalDate
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
@@ -53,18 +62,70 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val scheduleRepository = ScheduleRepository.getInstance(applicationContext)
         setContent {
             TempTheme {
-                ScheduleImportScreen(
-                    viewModel = courseImportViewModel,
-                    setupWebView = ::setupWebView,
-                    injectScheduleParser = ::injectScheduleParser,
-                    educationSystemUrl = EDUCATION_SYSTEM_URL,
-                    onCourseClick = { course ->
-                        Log.d(TAG, "course clicked: ${course.name}")
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                val courses by scheduleRepository.allCourses.collectAsState(initial = emptyList())
+                val context = LocalContext.current
+                val timeConfigManager = remember(context) { TimeConfigManager.getInstance(context) }
+                val calendarExportHelper = remember(context) { CalendarExportHelper(context) }
+                var shouldExportCalendar by remember { mutableStateOf(false) }
+                val calendarPermissionLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.RequestMultiplePermissions()
+                ) { grantResults ->
+                    if (grantResults.values.all { it }) {
+                        shouldExportCalendar = true
+                    } else {
+                        Toast.makeText(context, "需要日历读写权限才能导出课程", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                LaunchedEffect(shouldExportCalendar, courses) {
+                    if (shouldExportCalendar) {
+                        shouldExportCalendar = false
+                        if (courses.isNotEmpty()) {
+                            val result = calendarExportHelper.exportCourses(
+                                courses = courses,
+                                semesterStartMonday = SEMESTER_START_MONDAY,
+                                timeConfigManager = timeConfigManager
+                            )
+                            val message = result.fold(
+                                onSuccess = { count -> "已导出 $count 条日历事件" },
+                                onFailure = { throwable -> "导出失败：${throwable.message}" }
+                            )
+                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+
+                if (courses.isEmpty()) {
+                    ScheduleImportScreen(
+                        viewModel = courseImportViewModel,
+                        setupWebView = ::setupWebView,
+                        injectScheduleParser = ::injectScheduleParser,
+                        educationSystemUrl = EDUCATION_SYSTEM_URL,
+                        onCoursesImported = { importedCourses ->
+                            scheduleRepository.clearSchedule()
+                            scheduleRepository.insertCourses(importedCourses.toStoredCourses())
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    CourseTimetable(
+                        courses = courses,
+                        modifier = Modifier.fillMaxSize(),
+                        onCourseClick = { course ->
+                            Log.d(TAG, "course clicked: ${course.name}")
+                        },
+                        onExportClick = {
+                            if (CalendarExportHelper.hasCalendarPermissions(context)) {
+                                shouldExportCalendar = true
+                            } else {
+                                calendarPermissionLauncher.launch(CalendarExportHelper.REQUIRED_PERMISSIONS)
+                            }
+                        }
+                    )
+                }
             }
         }
     }
@@ -149,7 +210,7 @@ class MainActivity : ComponentActivity() {
         private val onParsed: (String) -> Unit
     ) {
         @JavascriptInterface
-        fun onScheduleParsed(json: String) {
+        fun onScheduleParsed(json: String)  {
             onParsed(json)
         }
     }
@@ -159,6 +220,7 @@ class MainActivity : ComponentActivity() {
         private const val SCHEDULE_BRIDGE_NAME = "ScheduleBridge"
         private const val SCHEDULE_PARSE_ASSET = "schedule_parse.js"
         private const val EDUCATION_SYSTEM_URL = "https://jwgl.hbmzu.edu.cn/edu"
+        private val SEMESTER_START_MONDAY = LocalDate.of(2026, 2, 23)
 
         private val LLM_CONFIG = LlmApiConfig(
             endpoint = "https://api-ai.vivo.com.cn/v1/chat/completions",
@@ -175,7 +237,7 @@ private fun ScheduleImportScreen(
     setupWebView: (WebView) -> Unit,
     injectScheduleParser: (WebView) -> Unit,
     educationSystemUrl: String,
-    onCourseClick: (Course) -> Unit,
+    onCoursesImported: suspend (List<ImportedCourse>) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val importState by viewModel.importState.collectAsState()
@@ -195,6 +257,7 @@ private fun ScheduleImportScreen(
         when (val state = importState) {
             is ImportState.Success -> {
                 Log.d("ScheduleImport", "valid course count: ${importedCourses.size}")
+                onCoursesImported(importedCourses)
                 snackbarHostState.showSnackbar("导入成功，解析到 ${importedCourses.size} 条课程")
             }
 
@@ -262,37 +325,27 @@ private fun ScheduleImportScreen(
             }
         }
     ) { innerPadding ->
-        if (importState is ImportState.Success) {
-            CourseTimetable(
-                courses = importedCourses,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                onCourseClick = onCourseClick
-            )
-        } else {
-            AndroidView(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding),
-                factory = { context ->
-                    WebView(context).apply {
-                        // 新增：强制指定 WebView 的 LayoutParams，解决网页无法滑动的问题
-                        layoutParams = android.view.ViewGroup.LayoutParams(
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                        )
+        AndroidView(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+            factory = { context ->
+                WebView(context).apply {
+                    // 新增：强制指定 WebView 的 LayoutParams，解决网页无法滑动的问题
+                    layoutParams = android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                    )
 
-                        setupWebView(this)
-                        // 初始化加载（如果不是 about:blank 就加载）
-                        if (educationSystemUrl != "about:blank") {
-                            loadUrl(educationSystemUrl)
-                        }
-                        webViewState.value = this
+                    setupWebView(this)
+                    // 初始化加载（如果不是 about:blank 就加载）
+                    if (educationSystemUrl != "about:blank") {
+                        loadUrl(educationSystemUrl)
                     }
+                    webViewState.value = this
                 }
-            )
-        }
+            }
+        )
     }
 
     if (importState is ImportState.Parsing) {
@@ -316,4 +369,46 @@ private fun ScheduleImportScreenPreview() {
     TempTheme {
         Text("Schedule import screen")
     }
+}
+
+private fun List<ImportedCourse>.toStoredCourses(): List<StoredCourse> {
+    return mapNotNull { course ->
+        val startPeriod = course.sections.minOrNull()
+        val endPeriod = course.sections.maxOrNull()
+        if (startPeriod == null || endPeriod == null) {
+            null
+        } else {
+            StoredCourse(
+                name = course.name,
+                location = course.position,
+                teacher = course.teacher,
+                dayOfWeek = course.day,
+                startPeriod = startPeriod,
+                endPeriod = endPeriod,
+                weekRange = formatWeekRange(course.weeks)
+            )
+        }
+    }
+}
+
+private fun formatWeekRange(weeks: List<Int>): String {
+    if (weeks.isEmpty()) return "未知周"
+
+    val sortedWeeks = weeks.distinct().sorted()
+    val ranges = mutableListOf<String>()
+    var rangeStart = sortedWeeks.first()
+    var previous = sortedWeeks.first()
+
+    sortedWeeks.drop(1).forEach { week ->
+        if (week == previous + 1) {
+            previous = week
+        } else {
+            ranges += if (rangeStart == previous) "$rangeStart" else "$rangeStart-$previous"
+            rangeStart = week
+            previous = week
+        }
+    }
+    ranges += if (rangeStart == previous) "$rangeStart" else "$rangeStart-$previous"
+
+    return ranges.joinToString(",") + "周"
 }
