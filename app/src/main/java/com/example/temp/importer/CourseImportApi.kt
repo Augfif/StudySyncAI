@@ -42,11 +42,17 @@ class CourseImportApi(
             .put("stream", true)
             .put(
                 "messages",
-                JSONArray().put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put("content", buildPrompt(html, rawText))
-                )
+                JSONArray()
+                    .put(
+                        JSONObject()
+                            .put("role", "system")
+                            .put("content", COURSE_SCHEDULE_SYSTEM_PROMPT)
+                    )
+                    .put(
+                        JSONObject()
+                            .put("role", "user")
+                            .put("content", buildPrompt(html, rawText))
+                    )
             )
 
         val request = Request.Builder()
@@ -118,23 +124,47 @@ class CourseImportApi(
     private fun extractTextChunk(data: String): String {
         return runCatching {
             val root = JSONObject(data)
+
+            // 兼容 1：标准的 choices 数组结构
             val choices = root.optJSONArray("choices")
             if (choices != null && choices.length() > 0) {
                 val first = choices.optJSONObject(0)
+
+                // 优先取标准流式格式 delta.content
                 val delta = first?.optJSONObject("delta")
-                val content = delta?.optString("content")
-                if (!content.isNullOrEmpty()) {
-                    return@runCatching content
+                if (delta != null && !delta.isNull("content")) {
+                    val content = delta.optString("content")
+                    if (content.isNotEmpty() && content != "null") {
+                        return@runCatching content
+                    }
                 }
-                val message = first?.optJSONObject("message")?.optString("content")
-                if (!message.isNullOrEmpty()) {
-                    return@runCatching message
+
+                // 兼容取 message.content (部分国内模型在流式输出中依然使用 message)
+                val message = first?.optJSONObject("message")
+                if (message != null && !message.isNull("content")) {
+                    val content = message.optString("content")
+                    if (content.isNotEmpty() && content != "null") {
+                        return@runCatching content
+                    }
                 }
             }
-            root.optString("output_text", "")
+
+            // 兼容 2：部分模型直接在顶层返回 output_text
+            val outputText = root.optString("output_text")
+            if (outputText.isNotEmpty() && outputText != "null") {
+                return@runCatching outputText
+            }
+
+            "" // 如果都没有，返回空字符串
         }.getOrElse {
-            // Some providers stream plain text chunks instead of JSON payloads.
-            data
+            // 兼容 3：如果传过来的根本不是 JSON，而是纯文本块，直接将 data 作为结果返回
+            if (data != "null") data else ""
         }
+    }
+
+    private fun JSONObject.stringOrEmpty(name: String): String {
+        if (!has(name) || isNull(name)) return ""
+        val value = opt(name)
+        return if (value is String && value != "null") value else ""
     }
 }

@@ -1,5 +1,6 @@
 package com.example.temp.importer
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineDispatcher
@@ -39,8 +40,18 @@ class CourseImportViewModel(
                     }
                 }
             }.onSuccess { rawResult ->
+                // ===== 新增这两行日志 =====
+                Log.d("ScheduleImport", "大模型原始返回: \n$rawResult")
+
                 val cleanJson = cleanMarkdownJson(rawResult)
-                _importState.value = ImportState.Success(cleanJson)
+
+                Log.d("ScheduleImport", "清洗后的 JSON: \n$cleanJson")
+                // ==========================
+
+                _importState.value = ImportState.Success(
+                    json = cleanJson,
+                    courses = validateCourses(cleanJson)
+                )
             }.onFailure { throwable ->
                 _importState.value = ImportState.Error(
                     throwable.message ?: "Unknown parsing error."
